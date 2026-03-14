@@ -62,6 +62,15 @@ logging.basicConfig(
 # В даному випадку __name__ буде "app"
 logger = logging.getLogger(__name__)
 
+# Base directory where app.py is located: src/
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Templates directory: src/templates/
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+
+# Static files directory: src/static/
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+
 # ─────────────────────────────────────────────
 # REQUEST HANDLER
 # ─────────────────────────────────────────────
@@ -80,21 +89,26 @@ class ImageServerHandler(BaseHTTPRequestHandler):
     """
 
     def do_GET(self):
-        """
-        Handle all incoming GET requests.
-        Routes the request to the correct handler based on self.path.
-        """
-        # Route: GET /
-        # Returns a simple JSON response to confirm server is running
-        if self.path == "/":
-            self._handle_home()
+        # Route: static files (CSS, JS, images)
+        # Any path starting with /static/ goes here
+        if self.path.startswith("/static/"):
+            # Remove "/static/" prefix to get relative path
+            # "/static/css/style.css" → "css/style.css"
+            static_path = self.path[len("/static/"):]
+            self._serve_static(static_path)
 
-        # Route: GET /health
-        # Health check endpoint — useful for Docker to verify container is alive
+        elif self.path == "/":
+            self._serve_html("index.html")
+
+        elif self.path == "/upload":
+            self._serve_html("upload.html")
+
+        elif self.path == "/images-list":
+            self._serve_html("images.html")
+
         elif self.path == "/health":
             self._handle_health()
 
-        # Route: anything else → 404 Not Found
         else:
             self._send_json(
                 status_code=404,
@@ -167,6 +181,85 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         # Step 3: Send the actual response body
         # Відправляємо все в браузер
         self.wfile.write(body_bytes)
+
+    def _serve_html(self, filename: str):
+        """
+        Reads an HTML file from templates directory and sends it to browser.
+
+        Args:
+            filename: HTML filename, e.g. "index.html"
+        """
+        # Build full path to the HTML file
+        # Example: /Users/.../src/templates/index.html
+        filepath = os.path.join(TEMPLATES_DIR, filename)
+
+        # Check if file exists — if not, return 404
+        if not os.path.exists(filepath):
+            self._send_json(
+                status_code=404,
+                data={"error": f"Template {filename} not found"}
+            )
+            logger.warning(f"Template not found: {filepath}")
+            return
+
+        # Read HTML file as bytes
+        # "rb" = read binary — we need bytes for HTTP
+        with open(filepath, "rb") as f:
+            content = f.read()
+
+        # Send response
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+        logger.info(f"GET {self.path} — served {filename}")
+
+    def _serve_static(self, filepath: str):
+        """
+        Serves static files: CSS, JS, images.
+        Automatically detects content type by file extension.
+
+        Args:
+            filepath: path after /static/, e.g. "css/style.css"
+        """
+        # Build full path to static file
+        full_path = os.path.join(STATIC_DIR, filepath)
+
+        # Check if file exists
+        if not os.path.exists(full_path):
+            self._send_json(
+                status_code=404,
+                data={"error": f"Static file not found: {filepath}"}
+            )
+            logger.warning(f"Static file not found: {full_path}")
+            return
+
+        # Detect content type by file extension
+        # Browser needs to know: "is this CSS or JS or image?"
+        extension = filepath.split(".")[-1].lower()
+        content_types = {
+            "css": "text/css",
+            "js": "application/javascript",
+            "png": "image/png",
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "ico": "image/x-icon",
+        }
+        # Fallback to binary stream if extension is unknown
+        content_type = content_types.get(extension, "application/octet-stream")
+
+        # Read file as bytes
+        with open(full_path, "rb") as f:
+            content = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
 
     def log_message(self, format, *args):
         """
