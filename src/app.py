@@ -1,22 +1,11 @@
-# http.server — built-in Python module, no installation needed
-# It provides BaseHTTPRequestHandler — a class that handles HTTP requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
-
-# json — built-in module for converting Python objects to JSON format
-# Example: {"status": "ok"} → '{"status": "ok"}'
 import json
-
-# os — built-in module for interacting with the operating system
-# We use it to read environment variables from .env file
 import os
-
-# logging — built-in module for writing logs to a file
-# Much better than print() because it adds timestamps automatically
 import logging
-
-# load_dotenv reads the .env file and puts variables into os.environ
-# Without this line, os.getenv() would not see our .env variables
+import cgi
 from dotenv import load_dotenv
+from validators import validate_image
+from file_handler import save_image
 
 # Load environment variables from .env file RIGHT NOW
 # Must be called before any os.getenv() calls
@@ -116,6 +105,107 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             )
             logger.warning(f"404 Not Found: {self.path}")
 
+    def do_POST(self):
+        """
+        Обробляє POST запити.
+        Зараз підтримує тільки маршрут /upload.
+        """
+        if self.path == "/upload":
+            self._handle_upload()
+        else:
+            self._send_json(
+                status_code=404,
+                data={"error": "Route not found", "path": self.path}
+            )
+            logger.warning(f"404 Not Found: {self.path}")
+
+    def _handle_upload(self):
+        """
+        Обробляє завантаження зображення.
+
+        Як працює multipart/form-data:
+        Браузер відправляє файл у спеціальному форматі — multipart.
+        Це як конверт з кількома відділеннями:
+            - одне відділення: назва файлу
+            - інше відділення: вміст файлу (байти)
+
+        Ми парсимо цей конверт вручну через cgi.FieldStorage.
+        """
+
+        # Parse multipart form data from request
+        # environ — словник з інформацією про запит (метод, тип контенту)
+        # fp — потік даних запиту (тіло запиту)
+        form = cgi.FieldStorage(
+            fp=self.rfile, # звідси читаємо сирі дані
+            headers=self.headers, # звідси беремо Content-Type і boundary
+            environ={
+                "REQUEST_METHOD": "POST",
+                "CONTENT_TYPE": self.headers.get("Content-Type"),
+            }
+        )
+
+        # Перевіряємо чи в формі існує поле "file"
+        # HTML: <input type="file" name="file">
+        #                                ↑ це ім'я поля
+        if "file" not in form:
+            self._send_json(
+                status_code=400,
+                data={"error": "No file field in request. Expected field name: 'file'"}
+            )
+            logger.warning("Upload attempt without file field")
+            return
+
+        # Отримуємо файл який завантажили
+        file_item = form["file"]
+
+        # Перевірити, чи файл дійсно був вибраний (не порожній)
+        if not file_item.filename:
+            self._send_json(
+                status_code=400,
+                data={"error": "No file selected"}
+            )
+            logger.warning("Upload attempt with empty file")
+            return
+
+        # Отримуємо оригінальне ім'я файлу та вміст файлу у вигляді байтів
+        original_filename = file_item.filename
+        file_bytes = file_item.file.read()
+        file_size = len(file_bytes)
+
+        # Step 1: Перевірте зображення
+        is_valid, error = validate_image(original_filename, file_size, file_bytes)
+        if not is_valid:
+            self._send_json(
+                status_code=400,
+                data={"error": error}
+            )
+            logger.warning(f"Validation failed: {error}")
+            return
+
+        # Step 2: Зберігаємо зображення
+        success, result = save_image(file_bytes, original_filename)
+        if not success:
+            self._send_json(
+                status_code=500,
+                data={"error": result}
+            )
+            logger.error(f"Save failed: {result}")
+            return
+
+        # Step 3: Повертаємо відповідь про успішне виконання з URL-адресою файлу
+        # result = згенерована назва файлу, наприклад "a1b2c3d4.jpg"
+        file_url = f"/images/{result}"
+        self._send_json(
+            status_code=200,
+            data={
+                "message": "Image uploaded successfully",
+                "filename": result,
+                "original_name": original_filename,
+                "url": file_url,
+                "size": file_size
+            }
+        )
+        logger.info(f"Upload success: {result} (original: {original_filename})")
 
     def _handle_health(self):
         """
