@@ -117,24 +117,6 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             logger.warning(f"404 Not Found: {self.path}")
 
 
-    def _handle_home(self):
-        """
-        Handler for GET /
-        Returns a welcome message with available routes.
-        """
-        response_data = {
-            "message": "Welcome to Image Server!",
-            "version": "1.0.0",
-            "routes": {
-                "GET  /": "This welcome message",
-                "GET  /health": "Server health check",
-                "POST /upload": "Upload an image (coming soon)",
-            }
-        }
-
-        self._send_json(status_code=200, data=response_data)
-        logger.info("GET / — home route accessed")
-
     def _handle_health(self):
         """
         Handler for GET /health
