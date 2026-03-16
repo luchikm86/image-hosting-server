@@ -1,23 +1,14 @@
-/* ─────────────────────────────────────────────
-   CSS RESET
-   Removes browser default styles for consistency
-   across different browsers (Chrome, Firefox, Safari)
-───────────────────────────────────────────── */
-
-/* Set box sizing for all elements */
 *,
 *::before,
 *::after {
     box-sizing: border-box;
 }
 
-/* Remove inner padding from lists with class */
 ul[class],
 ol[class] {
     padding: 0;
 }
 
-/* Remove outer margins from common elements */
 body,
 h1,
 h2,
@@ -27,15 +18,10 @@ p,
 ul[class],
 ol[class],
 li,
-figure,
-/*figcaption,
-blockquote,
-dl,
-dd*/ {
+figure {
     margin: 0;
 }
 
-/* Set default body settings */
 body {
     min-height: 100dvh;
     scroll-behavior: smooth;
@@ -46,30 +32,25 @@ body {
     color: #2D3436;
 }
 
-/* Remove default list styling */
 ul[class],
 ol[class] {
     list-style: none;
     padding: 0;
 }
 
-/* Reset links without class to default styles */
 a:not([class]) {
     text-decoration-skip-ink: auto;
 }
 
-/* Simplify working with images */
 img {
     max-width: 100%;
     display: block;
 }
 
-/* Clear periodicity in article data flow */
 article>*+* {
     margin-top: 1em;
 }
 
-/* Inherit fonts for form elements */
 input,
 button,
 textarea,
@@ -77,19 +58,11 @@ select {
     font: inherit;
 }
 
-/* ─────────────────────────────────────────────
-   BASE STYLES
-───────────────────────────────────────────── */
-
 body {
     background-color: #F2F5FF;
     font-family: "Inter", sans-serif;
     color: rgb(255, 255, 255);
 }
-
-/* ─────────────────────────────────────────────
-   HEADER — index.html
-───────────────────────────────────────────── */
 
 .header {
     display: flex;
@@ -109,7 +82,6 @@ body {
     font-size: 14px;
 }
 
-/* Header button */
 .header__button {
     display: flex;
     justify-content: center;
@@ -131,17 +103,12 @@ body {
     white-space: nowrap;
 }
 
-/* ─────────────────────────────────────────────
-   HERO — index.html (random image display)
-───────────────────────────────────────────── */
-
 .hero {
     display: flex;
     justify-content: center;
     margin-top: 60px;
 }
 
-/* Hidden by default — JS adds .is-visible to random one */
 .hero__img {
     display: none;
 }
@@ -156,11 +123,6 @@ body {
     object-fit: cover;
 }
 
-/* ─────────────────────────────────────────────
-   UPLOAD PAGE — upload.html / images.html
-───────────────────────────────────────────── */
-
-/* Page intro section */
 .upload__intro {
     display: flex;
     flex-direction: column;
@@ -180,10 +142,6 @@ body {
     width: 400px;
 }
 
-/* ─────────────────────────────────────────────
-   TABS — Upload / Images navigation
-───────────────────────────────────────────── */
-
 .upload__tabs {
     display: flex;
     justify-content: center;
@@ -196,21 +154,17 @@ body {
     all: unset;
     font-size: 20px;
     font-weight: bold;
-    color: rgb(173, 192, 248); /* Inactive tab color */
+    color: rgb(173, 192, 248);
     cursor: pointer;
 }
 
 .upload__tab--active {
-    color: rgb(0, 96, 255); /* Active tab color */
+    color: rgb(0, 96, 255);
 }
 
 .upload__tab:hover {
     color: rgb(105, 141, 250);
 }
-
-/* ─────────────────────────────────────────────
-   UPLOAD FORM — upload.html
-───────────────────────────────────────────── */
 
 .upload__form {
     display: flex;
@@ -219,7 +173,6 @@ body {
     padding-top: 50px;
 }
 
-/* Drag and drop zone */
 .upload__dropzone {
     border: 2px dashed rgb(0, 96, 255);
     border-radius: 12px;
@@ -246,7 +199,6 @@ body {
     color: rgb(173, 192, 248);
 }
 
-/* Browse file button */
 .upload__button {
     padding-top: 30px;
     padding-bottom: 50px;
@@ -264,10 +216,6 @@ body {
     padding-top: 7px;
     border: none;
 }
-
-/* ─────────────────────────────────────────────
-   CURRENT UPLOAD — URL display + copy button
-───────────────────────────────────────────── */
 
 .upload__container {
     display: flex;
@@ -289,7 +237,6 @@ body {
     text-align: left;
 }
 
-/* URL input + copy button wrapper */
 .upload__label {
     display: flex;
     align-items: center;
@@ -323,11 +270,6 @@ body {
     cursor: pointer;
 }
 
-/* ─────────────────────────────────────────────
-   FILE LIST — images.html (table of uploaded files)
-───────────────────────────────────────────── */
-
-/* Container for the entire table */
 .file-list-container {
     max-width: 800px;
     margin: 0 auto;
@@ -336,7 +278,6 @@ body {
     margin-bottom: 292px;
 }
 
-/* Common style for header row and list items */
 .file-list-header,
 .file-list-item {
     display: flex;
@@ -346,19 +287,16 @@ body {
     border-bottom: 1px solid #eef0f5;
 }
 
-/* Remove border from last item */
 .file-list-item:last-child {
     border-bottom: none;
 }
 
-/* Table header row */
 .file-list-header {
     color: #8a96b1;
     font-size: 14px;
     font-weight: 500;
 }
 
-/* Column styles */
 .file-col {
     display: flex;
     align-items: center;
@@ -391,7 +329,6 @@ body {
     height: 32px;
 }
 
-/* File name with overflow handling */
 .file-name {
     color: #333;
     font-weight: 500;
@@ -400,10 +337,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-
-/* ─────────────────────────────────────────────
-   DELETE BUTTON
-───────────────────────────────────────────── */
 
 .delete-btn {
     background: transparent;
@@ -420,4 +353,25 @@ body {
 .delete-btn:hover {
     background: transparent;
     opacity: 0.7;
+}
+
+.message-box {
+    text-align: center;
+    padding: 12px 20px;
+    margin: 20px auto;
+    width: 540px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+.message-box--success {
+    background-color: rgba(0, 200, 100, 0.1);
+    color: rgb(0, 150, 70);
+    border: 1px solid rgb(0, 200, 100);
+}
+
+.message-box--error {
+    background-color: rgba(255, 50, 50, 0.1);
+    color: rgb(200, 0, 0);
+    border: 1px solid rgb(255, 50, 50);
 }

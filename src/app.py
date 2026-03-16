@@ -2,7 +2,8 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import os
 import logging
-import cgi
+import email
+import email.parser
 from dotenv import load_dotenv
 from validators import validate_image
 from file_handler import save_image
@@ -98,6 +99,17 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         elif self.path == "/health":
             self._handle_health()
 
+        # Route: GET /api/images
+        # Повертає JSON список всіх завантажених зображень
+        elif self.path.startswith("/api/images"):
+            self._handle_images_list()
+
+        # Route: GET /images/<filename>
+        # Роздає фізичний файл зображення
+        elif self.path.startswith("/images/"):
+            filename = self.path[len("/images/"):]
+            self._serve_image(filename)
+
         else:
             self._send_json(
                 status_code=404,
@@ -112,6 +124,11 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         """
         if self.path == "/upload":
             self._handle_upload()
+        elif self.path.startswith("/delete/"):
+            # Отримуємо назву файлу з URL
+            # "/delete/a1b2c3.jpg" → "a1b2c3.jpg"
+            filename = self.path[len("/delete/"):]
+            self._handle_delete(filename)
         else:
             self._send_json(
                 status_code=404,
@@ -122,90 +139,213 @@ class ImageServerHandler(BaseHTTPRequestHandler):
     def _handle_upload(self):
         """
         Обробляє завантаження зображення.
-
-        Як працює multipart/form-data:
-        Браузер відправляє файл у спеціальному форматі — multipart.
-        Це як конверт з кількома відділеннями:
-            - одне відділення: назва файлу
-            - інше відділення: вміст файлу (байти)
-
-        Ми парсимо цей конверт вручну через cgi.FieldStorage.
+        Використовує email.parser для парсингу multipart/form-data
+        замість застарілого модуля cgi.
         """
+        try:
+            # Читаємо Content-Type з заголовків запиту
+            # Приклад: "multipart/form-data; boundary=----WebKitBoundary123"
+            content_type = self.headers.get("Content-Type", "")
 
-        # Parse multipart form data from request
-        # environ — словник з інформацією про запит (метод, тип контенту)
-        # fp — потік даних запиту (тіло запиту)
-        form = cgi.FieldStorage(
-            fp=self.rfile, # звідси читаємо сирі дані
-            headers=self.headers, # звідси беремо Content-Type і boundary
-            environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": self.headers.get("Content-Type"),
-            }
-        )
+            # Перевіряємо що запит містить файл (multipart)
+            if "multipart/form-data" not in content_type:
+                self._send_json(
+                    status_code=400,
+                    data={"error": "Expected multipart/form-data request"}
+                )
+                logger.warning("Upload attempt without multipart/form-data")
+                return
 
-        # Перевіряємо чи в формі існує поле "file"
-        # HTML: <input type="file" name="file">
-        #                                ↑ це ім'я поля
-        if "file" not in form:
-            self._send_json(
-                status_code=400,
-                data={"error": "No file field in request. Expected field name: 'file'"}
+            # Читаємо розмір тіла запиту з заголовків
+            # Content-Length каже скільки байтів очікувати
+            content_length = int(self.headers.get("Content-Length", 0))
+
+            # Читаємо тіло запиту (сирі байти)
+            body = self.rfile.read(content_length)
+
+            # email.parser парсить multipart дані
+            # Додаємо Content-Type як заголовок щоб парсер знав boundary
+            msg = email.message_from_bytes(
+                b"Content-Type: " + content_type.encode() + b"\r\n\r\n" + body
             )
-            logger.warning("Upload attempt without file field")
-            return
 
-        # Отримуємо файл який завантажили
-        file_item = form["file"]
+            # Шукаємо поле "file" серед всіх частин multipart
+            file_data = None
+            original_filename = None
 
-        # Перевірити, чи файл дійсно був вибраний (не порожній)
-        if not file_item.filename:
+            for part in msg.walk():
+                # Отримуємо Content-Disposition заголовок частини
+                # Приклад: 'form-data; name="file"; filename="photo.jpg"'
+                disposition = part.get("Content-Disposition", "")
+
+                # Шукаємо частину з name="file"
+                if 'name="file"' in disposition:
+                    # Отримуємо назву файлу
+                    # filename="photo.jpg" → "photo.jpg"
+                    for param in disposition.split(";"):
+                        param = param.strip()
+                        if param.startswith("filename="):
+                            original_filename = param.split("=", 1)[1].strip('"')
+
+                    # Отримуємо байти файлу
+                    file_data = part.get_payload(decode=True)
+                    break
+
+            # Перевіряємо чи знайшли поле file
+            if file_data is None or original_filename is None:
+                self._send_json(
+                    status_code=400,
+                    data={"error": "No file field found in request"}
+                )
+                logger.warning("Upload attempt without file field")
+                return
+
+            # Перевіряємо чи файл не порожній
+            if not original_filename:
+                self._send_json(
+                    status_code=400,
+                    data={"error": "No file selected"}
+                )
+                return
+
+            file_bytes = file_data
+            file_size = len(file_bytes)
+
+            # Крок 1: Валідація файлу
+            is_valid, error = validate_image(original_filename, file_size, file_bytes)
+            if not is_valid:
+                self._send_json(status_code=400, data={"error": error})
+                logger.warning(f"Validation failed: {error}")
+                return
+
+            # Крок 2: Зберігаємо файл на диск
+            success, result = save_image(file_bytes, original_filename)
+            if not success:
+                self._send_json(status_code=500, data={"error": result})
+                logger.error(f"Save failed: {result}")
+                return
+
+            # Крок 3: Повертаємо успішну відповідь з URL файлу
+            file_url = f"/images/{result}"
             self._send_json(
-                status_code=400,
-                data={"error": "No file selected"}
+                status_code=200,
+                data={
+                    "message": "Image uploaded successfully",
+                    "filename": result,
+                    "original_name": original_filename,
+                    "url": file_url,
+                    "size": file_size
+                }
             )
-            logger.warning("Upload attempt with empty file")
-            return
+            logger.info(f"Upload success: {result} (original: {original_filename})")
 
-        # Отримуємо оригінальне ім'я файлу та вміст файлу у вигляді байтів
-        original_filename = file_item.filename
-        file_bytes = file_item.file.read()
-        file_size = len(file_bytes)
-
-        # Step 1: Перевірте зображення
-        is_valid, error = validate_image(original_filename, file_size, file_bytes)
-        if not is_valid:
-            self._send_json(
-                status_code=400,
-                data={"error": error}
-            )
-            logger.warning(f"Validation failed: {error}")
-            return
-
-        # Step 2: Зберігаємо зображення
-        success, result = save_image(file_bytes, original_filename)
-        if not success:
+        except Exception as e:
+            logger.error(f"Upload error: {e}")
             self._send_json(
                 status_code=500,
-                data={"error": result}
+                data={"error": "Internal server error"}
             )
-            logger.error(f"Save failed: {result}")
+
+    def _handle_images_list(self):
+        """
+        Повертає JSON список всіх зображень з папки /images.
+        images.js викликає цей маршрут щоб отримати список файлів.
+        """
+        # Шлях до папки з зображеннями
+        images_dir = os.path.join(BASE_DIR, "..", "images")
+
+        # Якщо папка не існує — повертаємо порожній список
+        if not os.path.exists(images_dir):
+            self._send_json(status_code=200, data={"images": []})
             return
 
-        # Step 3: Повертаємо відповідь про успішне виконання з URL-адресою файлу
-        # result = згенерована назва файлу, наприклад "a1b2c3d4.jpg"
-        file_url = f"/images/{result}"
-        self._send_json(
-            status_code=200,
-            data={
-                "message": "Image uploaded successfully",
-                "filename": result,
-                "original_name": original_filename,
-                "url": file_url,
-                "size": file_size
-            }
-        )
-        logger.info(f"Upload success: {result} (original: {original_filename})")
+        # Читаємо всі файли з папки images/
+        images = []
+        for filename in os.listdir(images_dir):
+            # Пропускаємо приховані файли (.DS_Store тощо)
+            if filename.startswith("."):
+                continue
+
+            filepath = os.path.join(images_dir, filename)
+
+            # Отримуємо інформацію про файл
+            stat = os.stat(filepath)
+
+            images.append({
+                "filename": filename,
+                "url": f"/images/{filename}",
+                "size": stat.st_size,
+            })
+
+        self._send_json(status_code=200, data={"images": images})
+        logger.info(f"GET /api/images — returned {len(images)} images")
+
+    def _serve_image(self, filename: str):
+        """
+        Роздає фізичний файл зображення з папки /images.
+
+        Args:
+            filename: назва файлу, наприклад "a1b2c3d4.jpg"
+        """
+        # Захист від path traversal атаки
+        # "../../../etc/passwd" → відхиляємо ❌
+        if ".." in filename or "/" in filename:
+            self._send_json(status_code=400, data={"error": "Invalid filename"})
+            return
+
+        images_dir = os.path.join(BASE_DIR, "..", "images")
+        filepath = os.path.join(images_dir, filename)
+
+        # Перевіряємо чи файл існує
+        if not os.path.exists(filepath):
+            self._send_json(status_code=404, data={"error": "Image not found"})
+            logger.warning(f"Image not found: {filename}")
+            return
+
+        # Визначаємо тип контенту по розширенню
+        extension = filename.rsplit(".", 1)[-1].lower()
+        content_types = {
+            "jpg": "image/jpeg",
+            "jpeg": "image/jpeg",
+            "png": "image/png",
+            "gif": "image/gif",
+        }
+        content_type = content_types.get(extension, "application/octet-stream")
+
+        # Читаємо і відправляємо файл
+        with open(filepath, "rb") as f:
+            content = f.read()
+
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+        logger.info(f"GET /images/{filename} — served")
+
+    def _handle_delete(self, filename: str):
+        """
+        Видаляє зображення з диску.
+
+        Args:
+            filename: назва файлу, наприклад "a1b2c3d4.jpg"
+        """
+        from file_handler import delete_image
+
+        # Захист від path traversal
+        if ".." in filename or "/" in filename:
+            self._send_json(status_code=400, data={"error": "Invalid filename"})
+            return
+
+        success, message = delete_image(filename)
+
+        if success:
+            self._send_json(status_code=200, data={"message": message})
+            logger.info(f"Deleted: {filename}")
+        else:
+            self._send_json(status_code=404, data={"error": message})
+            logger.warning(f"Delete failed: {filename}")
 
     def _handle_health(self):
         """
