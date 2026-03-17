@@ -1,4 +1,4 @@
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import json
 import os
 import logging
@@ -7,6 +7,7 @@ import email.parser
 from dotenv import load_dotenv
 from validators import validate_image
 from file_handler import save_image
+from database import init_db, save_image_metadata, get_images, delete_image_metadata
 
 # Load environment variables from .env file RIGHT NOW
 # Must be called before any os.getenv() calls
@@ -127,8 +128,8 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         elif self.path.startswith("/delete/"):
             # Отримуємо назву файлу з URL
             # "/delete/a1b2c3.jpg" → "a1b2c3.jpg"
-            filename = self.path[len("/delete/"):]
-            self._handle_delete(filename)
+            image_id = self.path[len("/delete/"):]
+            self._handle_delete(image_id)
         else:
             self._send_json(
                 status_code=404,
@@ -225,7 +226,19 @@ class ImageServerHandler(BaseHTTPRequestHandler):
                 logger.error(f"Save failed: {result}")
                 return
 
-            # Крок 3: Повертаємо успішну відповідь з URL файлу
+            # Крок 3: Зберігаємо метадані в БД  ← НОВИЙ КРОК
+            file_type = original_filename.rsplit(".", 1)[1].lower()
+            image_id = save_image_metadata(
+                filename=result,
+                original_name=original_filename,
+                size=file_size,
+                file_type=file_type
+            )
+
+            if image_id is None:
+                logger.warning("File saved but metadata not saved to DB")
+
+            # Крок 4: Повертаємо успішну відповідь ← ЦЕ БУЛО ВІДСУТНЄ!
             file_url = f"/images/{result}"
             self._send_json(
                 status_code=200,
@@ -248,37 +261,34 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def _handle_images_list(self):
         """
-        Повертає JSON список всіх зображень з папки /images.
-        images.js викликає цей маршрут щоб отримати список файлів.
+        Повертає JSON список зображень з БД з пагінацією.
         """
-        # Шлях до папки з зображеннями
-        images_dir = os.path.join(BASE_DIR, "..", "images")
+        # Отримуємо номер сторінки з URL
+        # /api/images?page=2 → page=2
+        page = 1
+        if "?" in self.path:
+            query = self.path.split("?")[1]
+            for param in query.split("&"):
+                if param.startswith("page="):
+                    try:
+                        page = int(param.split("=")[1])
+                    except ValueError:
+                        page = 1
 
-        # Якщо папка не існує — повертаємо порожній список
-        if not os.path.exists(images_dir):
-            self._send_json(status_code=200, data={"images": []})
-            return
+        # Отримуємо зображення з БД
+        images, total = get_images(page=page, per_page=10)
 
-        # Читаємо всі файли з папки images/
-        images = []
-        for filename in os.listdir(images_dir):
-            # Пропускаємо приховані файли (.DS_Store тощо)
-            if filename.startswith("."):
-                continue
+        # Рахуємо загальну кількість сторінок
+        import math
+        total_pages = math.ceil(total / 10) if total > 0 else 1
 
-            filepath = os.path.join(images_dir, filename)
-
-            # Отримуємо інформацію про файл
-            stat = os.stat(filepath)
-
-            images.append({
-                "filename": filename,
-                "url": f"/images/{filename}",
-                "size": stat.st_size,
-            })
-
-        self._send_json(status_code=200, data={"images": images})
-        logger.info(f"GET /api/images — returned {len(images)} images")
+        self._send_json(status_code=200, data={
+            "images": images,
+            "page": page,
+            "total": total,
+            "total_pages": total_pages
+        })
+        logger.info(f"GET /api/images?page={page} — returned {len(images)}/{total}")
 
     def _serve_image(self, filename: str):
         """
@@ -324,28 +334,32 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
         logger.info(f"GET /images/{filename} — served")
 
-    def _handle_delete(self, filename: str):
+    def _handle_delete(self, image_id: str):
         """
-        Видаляє зображення з диску.
-
-        Args:
-            filename: назва файлу, наприклад "a1b2c3d4.jpg"
+        Видаляє зображення з БД і з диску по id.
         """
-        from file_handler import delete_image
-
-        # Захист від path traversal
-        if ".." in filename or "/" in filename:
-            self._send_json(status_code=400, data={"error": "Invalid filename"})
+        # Перевіряємо що id — це число
+        try:
+            image_id = int(image_id)
+        except ValueError:
+            self._send_json(status_code=400, data={"error": "Invalid image id"})
             return
 
-        success, message = delete_image(filename)
+        # Крок 1: Видаляємо метадані з БД і отримуємо filename
+        success, result = delete_image_metadata(image_id)
+        if not success:
+            self._send_json(status_code=404, data={"error": result})
+            return
 
-        if success:
-            self._send_json(status_code=200, data={"message": message})
-            logger.info(f"Deleted: {filename}")
-        else:
-            self._send_json(status_code=404, data={"error": message})
-            logger.warning(f"Delete failed: {filename}")
+        # Крок 2: Видаляємо фізичний файл
+        filename = result
+        from file_handler import delete_image
+        success, message = delete_image(filename)
+        if not success:
+            logger.warning(f"Metadata deleted but file not found: {filename}")
+
+        self._send_json(status_code=200, data={"message": f"Image {image_id} deleted"})
+        logger.info(f"Deleted image id={image_id} filename={filename}")
 
     def _handle_health(self):
         """
@@ -387,12 +401,16 @@ class ImageServerHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         # Content-Length tells the browser how many bytes to expect
         self.send_header("Content-Length", str(len(body_bytes)))
+        # Говоримо браузеру що після відповіді з'єднання закривається
+        self.send_header("Connection", "close")
         # end_headers() sends an empty line — required by HTTP protocol
         self.end_headers()
 
         # Step 3: Send the actual response body
         # Відправляємо все в браузер
         self.wfile.write(body_bytes)
+        # Примусово відправляємо всі байти з буфера
+        self.wfile.flush()
 
     def _serve_html(self, filename: str):
         """
@@ -493,13 +511,17 @@ def run_server():
     """
     # Read server config from .env file
     # If not set — use sensible defaults
-    host = os.getenv("SERVER_HOST", "0.0.0.0")
+    host = os.getenv("SERVER_HOST", "127.0.0.1")
     port = int(os.getenv("SERVER_PORT", "8000"))
 
     try:
         # HTTPServer creation is INSIDE try block
         # because this is where OSError happens if port is busy
-        server = HTTPServer((host, port), ImageServerHandler)
+        server = ThreadingHTTPServer((host, port), ImageServerHandler)
+
+        # Ініціалізуємо БД при старті
+        logger.info("Initializing database...")
+        init_db()
 
         logger.info(f"Server started at http://{host}:{port}")
         logger.info("Press Ctrl+C to stop")

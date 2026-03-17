@@ -96,7 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <a href="${fullUrl}" target="_blank">${fullUrl}</a>
                 </div>
                 <div class="file-col file-col-delete">
-                    <button class="delete-btn" data-filename="${image.filename}">🗑️</button>
+                    <button class="delete-btn" data-id="${image.id}" data-filename="${image.filename}">🗑️</button>
                 </div>
             `;
             list.appendChild(fileItem);
@@ -116,6 +116,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const addDeleteListeners = () => {
         document.querySelectorAll('.delete-btn').forEach(button => {
             button.addEventListener('click', async (event) => {
+                const imageId = event.currentTarget.dataset.id;
                 const filename = event.currentTarget.dataset.filename;
 
                 // Підтвердження видалення
@@ -124,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     // Відправляємо запит на видалення
                     // POST /delete/<filename>
-                    const response = await fetch(`/delete/${filename}`, {
+                    const response = await fetch(`/delete/${imageId}`, {
                         method: 'POST'
                     });
 
