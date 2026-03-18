@@ -1,0 +1,25 @@
+# Virtual environment — не потрібен в Docker
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables — секрети не йдуть в образ!
+.env
+
+# Локальні дані — керуються через Volumes
+images/
+logs/
+backups/
+
+# macOS
+.DS_Store
+
+# PyCharm
+.idea/
