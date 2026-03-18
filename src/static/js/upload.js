@@ -1,22 +1,33 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const fileUpload = document.getElementById('file-upload');
-    const imagesButton = document.getElementById('images-tab-btn');
-    const dropzone = document.querySelector('.upload__dropzone');
-    const currentUploadInput = document.querySelector('.upload__input');
-    const copyButton = document.querySelector('.upload__copy');
 
-    // Використовуємо для показу повідомлень замість alert()
+    // ─────────────────────────────────────────────
+    // DOM ЕЛЕМЕНТИ
+    // ─────────────────────────────────────────────
+
+    // Отримуємо посилання на елементи сторінки
+    const fileUpload = document.getElementById('file-upload');         // input для вибору файлу
+    const imagesButton = document.getElementById('images-tab-btn');    // кнопка вкладки "Images"
+    const dropzone = document.querySelector('.upload__dropzone');       // зона для drag & drop
+    const currentUploadInput = document.querySelector('.upload__input'); // поле з URL файлу
+    const copyButton = document.querySelector('.upload__copy');          // кнопка копіювання URL
+
+    // Блок для показу повідомлень про успіх або помилку
     const messageBox = document.getElementById('message-box');
 
-    // Оновлюємо стиль активної вкладки залежно від поточної сторінки
+    // ─────────────────────────────────────────────
+    // НАВІГАЦІЯ МІЖ ВКЛАДКАМИ
+    // ─────────────────────────────────────────────
+
+    // Визначаємо яка вкладка активна залежно від поточної сторінки
     const updateTabStyles = () => {
         const uploadTab = document.getElementById('upload-tab-btn');
         const imagesTab = document.getElementById('images-tab-btn');
 
+        // Спочатку знімаємо активний клас з обох вкладок
         uploadTab.classList.remove('upload__tab--active');
         imagesTab.classList.remove('upload__tab--active');
 
-        // Перевіряємо чи ми на сторінці images-list
+        // Додаємо активний клас до потрібної вкладки
         if (window.location.pathname.includes('images-list')) {
             imagesTab.classList.add('upload__tab--active');
         } else {
@@ -24,35 +35,46 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // Переходимо на сторінку зображень при кліку на вкладку
+    // При кліку на вкладку "Images" — переходимо на сторінку списку
     if (imagesButton) {
         imagesButton.addEventListener('click', () => {
             window.location.href = '/images-list';
         });
     }
 
-    // Показуємо повідомлення користувачу замість alert()
-    // type: "success" або "error"
+    // ─────────────────────────────────────────────
+    // ПОВІДОМЛЕННЯ КОРИСТУВАЧУ
+    // ─────────────────────────────────────────────
+
+    // Показуємо повідомлення в блоці message-box замість alert()
+    // type: "success" (зелений) або "error" (червоний)
     const showMessage = (text, type) => {
         if (!messageBox) return;
 
+        // Встановлюємо текст і CSS клас для кольору
         messageBox.textContent = text;
         messageBox.className = `message-box message-box--${type}`;
         messageBox.style.display = 'block';
 
-        // Ховаємо повідомлення через 4 секунди
+        // Автоматично ховаємо повідомлення через 4 секунди
         setTimeout(() => {
             messageBox.style.display = 'none';
         }, 4000);
     };
 
+    // ─────────────────────────────────────────────
+    // КНОПКА КОПІЮВАННЯ URL
+    // ─────────────────────────────────────────────
+
     if (copyButton && currentUploadInput) {
         copyButton.addEventListener('click', () => {
             const textToCopy = currentUploadInput.value;
 
-            // Копіюємо тільки якщо поле не порожнє
+            // Копіюємо тільки якщо поле містить реальний URL
             if (textToCopy && textToCopy !== 'https://') {
+                // navigator.clipboard — сучасний API для роботи з буфером обміну
                 navigator.clipboard.writeText(textToCopy).then(() => {
+                    // Тимчасово змінюємо текст кнопки для підтвердження
                     copyButton.textContent = 'COPIED!';
                     setTimeout(() => {
                         copyButton.textContent = 'COPY';
@@ -64,47 +86,55 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const uploadFile = async (file) => {
-        // Перевірка на клієнті (швидка) перед відправкою на сервер
-        const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
-        const MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+    // ─────────────────────────────────────────────
+    // ЗАВАНТАЖЕННЯ ФАЙЛУ НА СЕРВЕР
+    // ─────────────────────────────────────────────
 
+    // Головна функція — відправляє файл на сервер і обробляє відповідь
+    // async/await — дозволяє писати асинхронний код як синхронний
+    const uploadFile = async (file) => {
+
+        // Швидка перевірка на клієнті перед відправкою на сервер
+        // Це економить час — не потрібно чекати відповіді сервера
+        const allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+        const MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB в байтах
+
+        // Перевіряємо MIME тип файлу
         if (!allowedTypes.includes(file.type)) {
             showMessage(`❌ Invalid file type: ${file.type}. Only JPG, PNG, GIF allowed.`, 'error');
             return;
         }
 
+        // Перевіряємо розмір файлу
         if (file.size > MAX_SIZE_BYTES) {
             const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
             showMessage(`❌ File too large: ${sizeMB}MB. Maximum is 5MB.`, 'error');
             return;
         }
 
-        // Створюємо FormData — спеціальний об'єкт для відправки файлів
-        // Це те що браузер відправляє як multipart/form-data
+        // FormData — спеціальний об'єкт для відправки файлів через HTTP
+        // Браузер автоматично встановить Content-Type: multipart/form-data
         const formData = new FormData();
-        // "file" — це ім'я поля яке чекає наш сервер
-        // app.py: if "file" not in form
-        formData.append('file', file);
+        formData.append('file', file); // "file" — ім'я поля яке очікує app.py
 
         try {
-            // Показуємо що файл завантажується
+            // Показуємо індикатор завантаження
             showMessage('⏳ Uploading...', 'success');
 
-            // fetch() — відправляє HTTP запит на наш сервер
-            // Це як XMLHttpRequest але сучасніше і простіше
+            // fetch() — відправляє HTTP POST запит на наш сервер
+            // await — чекаємо відповіді від сервера
             const response = await fetch('/upload', {
                 method: 'POST',
                 body: formData,
-                // Content-Type НЕ вказуємо — браузер сам встановить
-                // multipart/form-data з правильним boundary
+                // Content-Type НЕ вказуємо вручну — браузер сам додасть
+                // multipart/form-data з правильним boundary рядком
             });
 
-            // Отримуємо JSON відповідь від сервера
+            // Парсимо JSON відповідь від сервера
             const data = await response.json();
 
             if (response.ok) {
-                // Сервер повернув 200 — успіх!
+                // response.ok = true якщо статус код 200-299
                 // Показуємо URL завантаженого файлу в полі вводу
                 if (currentUploadInput) {
                     currentUploadInput.value = `http://localhost:8000${data.url}`;
@@ -112,38 +142,48 @@ document.addEventListener('DOMContentLoaded', () => {
                 showMessage(`✅ File uploaded: ${data.original_name}`, 'success');
 
             } else {
-                // Сервер повернув помилку (400, 500)
+                // Сервер повернув помилку (400 — невалідний файл, 500 — помилка сервера)
                 showMessage(`❌ ${data.error}`, 'error');
             }
 
         } catch (err) {
-            // Мережева помилка — сервер недоступний
+            // catch спрацьовує при мережевій помилці (сервер недоступний)
             console.error('Upload error:', err);
             showMessage(`❌ Server error. Please try again.`, 'error');
         }
     };
 
+    // ─────────────────────────────────────────────
+    // ВИБІР ФАЙЛУ ЧЕРЕЗ КНОПКУ
+    // ─────────────────────────────────────────────
+
+    // Спрацьовує коли користувач вибрав файл через діалог
     fileUpload.addEventListener('change', async (event) => {
         const files = event.target.files;
 
-        // Завантажуємо кожен файл по черзі
+        // Завантажуємо кожен файл по черзі (підтримуємо multiple)
         for (const file of files) {
             await uploadFile(file);
         }
 
-        // Скидаємо input щоб можна було завантажити той самий файл знову
+        // Скидаємо значення input — дозволяє завантажити той самий файл знову
         event.target.value = '';
     });
 
-    // Забороняємо дефолтну поведінку браузера (відкрити файл)
+    // ─────────────────────────────────────────────
+    // DRAG & DROP
+    // ─────────────────────────────────────────────
+
+    // Забороняємо дефолтну поведінку браузера для всіх drag подій
+    // Без цього браузер відкрив би файл замість завантаження
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         dropzone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault();  // скасовуємо дефолтну дію
+            e.stopPropagation(); // зупиняємо поширення події вгору по DOM
         });
     });
 
-    // Підсвічуємо dropzone при перетягуванні
+    // Підсвічуємо dropzone коли файл перетягують над нею
     ['dragenter', 'dragover'].forEach(eventName => {
         dropzone.addEventListener(eventName, () => {
             dropzone.style.borderColor = 'rgb(0, 96, 255)';
@@ -151,6 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Прибираємо підсвічування коли файл покинув зону або був відпущений
     ['dragleave', 'drop'].forEach(eventName => {
         dropzone.addEventListener(eventName, () => {
             dropzone.style.borderColor = '';
@@ -158,13 +199,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Обробляємо файли які перетягнули
+    // Обробляємо файли які перетягнули і відпустили в dropzone
     dropzone.addEventListener('drop', async (event) => {
+        // event.dataTransfer.files — файли які перетягнули
         const files = event.dataTransfer.files;
         for (const file of files) {
             await uploadFile(file);
         }
     });
 
+    // ─────────────────────────────────────────────
+    // ІНІЦІАЛІЗАЦІЯ
+    // ─────────────────────────────────────────────
+
+    // Встановлюємо правильний стиль активної вкладки при завантаженні сторінки
     updateTabStyles();
 });
