@@ -1,5 +1,6 @@
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 import json
+import math
 import os
 import logging
 import email
@@ -9,8 +10,6 @@ from validators import validate_image
 from file_handler import save_image
 from database import init_db, save_image_metadata, get_images, delete_image_metadata
 
-# Load environment variables from .env file RIGHT NOW
-# Must be called before any os.getenv() calls
 # Читаємо файл .env для роботи з ним
 load_dotenv()
 
@@ -19,47 +18,40 @@ load_dotenv()
 # LOGGING SETUP
 # ─────────────────────────────────────────────
 
-# Get log file path from .env, fallback to local file if not set
+# Шлях до log файла з .env, значення за замовчуванням якщо шлях буде відсутній
 LOG_FILE = os.getenv("LOG_FILE", "../logs/app.log")
 
-# Create logs directory if it doesn't exist yet
-# exist_ok=True means: don't raise error if folder already exists
 # Створюємо директорію. Якщо вона була створена і exist_ok=True, тоді не виникає помилки
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 
-# Configure the logging system:
-# - level=INFO means: write INFO, WARNING, ERROR (skip DEBUG)
-# - format: how each log line looks
-# - handlers: write to BOTH file and terminal simultaneously
-# Налаштовуємо систему логування
+# Налаштовуємо систему логування:
+# - level=INFO: пише INFO, WARNING, ERROR (пропускає DEBUG)
+# - format: як буде виглядати рядок нашого журналу логування
+# - handlers: одночасно пише в журнал логування та дублює в термінал
 logging.basicConfig(
     level=logging.INFO,
     format="[%(asctime)s] %(levelname)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
-        # FileHandler writes logs to app.log file
-        # Записуємо logs у файл app.log
+        # FileHandler записує logs у файл app.log
         logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        # StreamHandler prints logs to terminal (useful during development)
-        # Виводимо logs у термінал
+        # StreamHandler виводить логи в термінал
         logging.StreamHandler(),
     ],
 )
 
-# Create a logger object for this module
-# __name__ will be "app" — helps identify which file wrote the log
 # Створює іменований об'єкт логера для цього файлу, щоб в логах було видно звідки прийшло кожне повідомлення
 # __name__ - це вбудована змінна Python яка містить назву поточного модуля.
 # В даному випадку __name__ буде "app"
 logger = logging.getLogger(__name__)
 
-# Base directory where app.py is located: src/
+# Базовий каталог, де знаходиться app.py: src/
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Templates directory: src/templates/
+# Каталог шаблонів: src/templates/
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-# Static files directory: src/static/
+# Каталог статичних файлів: src/static/
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 # ─────────────────────────────────────────────
@@ -68,49 +60,54 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 
 class ImageServerHandler(BaseHTTPRequestHandler):
     """
-    Main HTTP request handler for the Image Server.
+    Головний обробник HTTP запитів для сервера зображень
 
-    This class inherits from BaseHTTPRequestHandler.
-    For every HTTP method (GET, POST) we define a method:
-        do_GET()  → handles all GET requests
-        do_POST() → handles all POST requests (added later)
+    Цей клас успадковується від BaseHTTPRequestHandler.
+    Для кожного методу HTTP (GET, POST) ми визначаємо метод:
+        do_GET()  → обробляє всі GET запити
+        do_POST() → обробляє всі POST запити
 
-    self.path     → the URL path, e.g. "/" or "/upload"
-    self.command  → HTTP method, e.g. "GET" or "POST"
     """
 
     def do_GET(self):
-        # Route: static files (CSS, JS, images)
-        # Any path starting with /static/ goes here
+        """
+        Обробляє всі GET запити від браузера.
+        Визначає який марршрут викликати по self.path.
+        """
+        # Якщо URL починається з /static/, то відправляємо файл браузеру у відповідь на запит (css, js, img)
+        # Видаляємо префікс /static/, щоб отримати відносний шлях до файлу.
+        # Приклад "/static/css/style.css" → "css/style.css"
         if self.path.startswith("/static/"):
-            # Remove "/static/" prefix to get relative path
-            # "/static/css/style.css" → "css/style.css"
             static_path = self.path[len("/static/"):]
             self._serve_static(static_path)
 
+        # Головна сторінка
         elif self.path == "/":
             self._serve_html("index.html")
 
+        # Сторінка завантаження зображень
         elif self.path == "/upload":
             self._serve_html("upload.html")
 
+        # Сторінка списку зображень
         elif self.path == "/images-list":
             self._serve_html("images.html")
 
+        # Перевірка стану сервера (використовуємо інструмент Docker Healthcheck)
         elif self.path == "/health":
             self._handle_health()
 
-        # Route: GET /api/images
-        # Повертає JSON список всіх завантажених зображень
+        # API маршрут, який повертає список всіх зображень з БД
         elif self.path.startswith("/api/images"):
             self._handle_images_list()
 
-        # Route: GET /images/<filename>
-        # Роздає фізичний файл зображення
+        # Роздає фізичний файл зображення з папки /images
+        # Приклад: "/images/a1b2c3.jpg" → "a1b2c3.jpg"
         elif self.path.startswith("/images/"):
             filename = self.path[len("/images/"):]
             self._serve_image(filename)
 
+        # Якщо маршрут невідомий, то повертаємо 404
         else:
             self._send_json(
                 status_code=404,
@@ -120,16 +117,21 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """
-        Обробляє POST запити.
-        Зараз підтримує тільки маршрут /upload.
+        Функція обробляє POST запити від браузера.
+        POST використовується для дій, які змінюють дані сервера:
+            - POST /upload      →   завантаження зображення
+            - POST /delete/id   →   видалення зображення
         """
+        # Завантажуємо нове зображення на сервер
         if self.path == "/upload":
             self._handle_upload()
+
+        # Видаляємо зображення по id
+        # Приклад "/delete/12" → image_id = "12"
         elif self.path.startswith("/delete/"):
-            # Отримуємо назву файлу з URL
-            # "/delete/a1b2c3.jpg" → "a1b2c3.jpg"
             image_id = self.path[len("/delete/"):]
             self._handle_delete(image_id)
+        # Якщо маршрут невідомий, то повертаємо 404
         else:
             self._send_json(
                 status_code=404,
@@ -139,9 +141,15 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def _handle_upload(self):
         """
-        Обробляє завантаження зображення.
+        Обробляє завантаження зображення на сервер.
+
+        Кроки обробки:
+            1. Парсимо multipart/form-data запит через email.parser
+            2. Валідуємо файл (розширення, розмір, вміст)
+            3. Зберігаємо файл на диск
+            4. Зберігаємо метадані в PostgreSQL
+            5. Повертаємо JSON відповідь з URL файлу
         Використовує email.parser для парсингу multipart/form-data
-        замість застарілого модуля cgi.
         """
         try:
             # Читаємо Content-Type з заголовків запиту
@@ -226,7 +234,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
                 logger.error(f"Save failed: {result}")
                 return
 
-            # Крок 3: Зберігаємо метадані в БД  ← НОВИЙ КРОК
+            # Крок 3: Зберігаємо метадані в БД
             file_type = original_filename.rsplit(".", 1)[1].lower()
             image_id = save_image_metadata(
                 filename=result,
@@ -238,7 +246,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             if image_id is None:
                 logger.warning("File saved but metadata not saved to DB")
 
-            # Крок 4: Повертаємо успішну відповідь ← ЦЕ БУЛО ВІДСУТНЄ!
+            # Крок 4: Повертаємо успішну відповідь з URL файлу
             file_url = f"/images/{result}"
             self._send_json(
                 status_code=200,
@@ -262,8 +270,13 @@ class ImageServerHandler(BaseHTTPRequestHandler):
     def _handle_images_list(self):
         """
         Повертає JSON список зображень з БД з пагінацією.
+
+        Підтримує параметр page в URL:
+            GET /api/images        → сторінка 1
+            GET /api/images?page=2 → сторінка 2
         """
-        # Отримуємо номер сторінки з URL
+        # Отримуємо номер сторінки з URL параметра ?page=N
+        # Якщо параметр відсутній або невалідний — використовуємо сторінку 1
         # /api/images?page=2 → page=2
         page = 1
         if "?" in self.path:
@@ -275,11 +288,11 @@ class ImageServerHandler(BaseHTTPRequestHandler):
                     except ValueError:
                         page = 1
 
-        # Отримуємо зображення з БД
+        # Отримуємо зображення з БД для поточної сторінки
         images, total = get_images(page=page, per_page=10)
 
         # Рахуємо загальну кількість сторінок
-        import math
+        # math.ceil округлює вгору: 11 зображень / 10 = 1.1 → 2 сторінки
         total_pages = math.ceil(total / 10) if total > 0 else 1
 
         self._send_json(status_code=200, data={
@@ -293,11 +306,9 @@ class ImageServerHandler(BaseHTTPRequestHandler):
     def _serve_image(self, filename: str):
         """
         Роздає фізичний файл зображення з папки /images.
-
-        Args:
-            filename: назва файлу, наприклад "a1b2c3d4.jpg"
+        Захист від path traversal атаки
         """
-        # Захист від path traversal атаки
+
         # "../../../etc/passwd" → відхиляємо ❌
         if ".." in filename or "/" in filename:
             self._send_json(status_code=400, data={"error": "Invalid filename"})
@@ -337,6 +348,7 @@ class ImageServerHandler(BaseHTTPRequestHandler):
     def _handle_delete(self, image_id: str):
         """
         Видаляє зображення з БД і з диску по id.
+        Спочатку видаляє метадані з БД, потім фізичний файл.
         """
         # Перевіряємо що id — це число
         try:
@@ -363,8 +375,8 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def _handle_health(self):
         """
-        Handler for GET /health
-        Returns server status. Docker uses this to check if container is alive.
+        Перевірка стану сервера.
+        Docker використовує цей маршрут для healthcheck контейнера.
         """
         self._send_json(
             status_code=200,
@@ -374,56 +386,45 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, status_code: int, data:dict):
         """
-        Helper method to send a JSON response.
-
-        Why a helper? Because every response needs the same 3 steps:
-        1. Send status code (200, 404, etc.)
-        2. Send headers (Content-Type: application/json)
-        3. Send body (the actual JSON data)
-
-        Args:
-            status_code: HTTP status code (200, 404, 500...)
-            data: Python dict that will be converted to JSON
+        Допоміжний метод для відправки JSON відповіді браузеру.
+        Кожна відповідь складається з трьох кроків:
+            1. Статус код (200, 404, 500...)
+            2. Заголовки (Content-Type, Content-Length)
+            3. Тіло відповіді (JSON дані)
         """
-        # Convert Python dict to JSON string, ensure_ascii=False for Unicode
         # Перетворюємо dict в JSON рядок
         body = json.dumps(data, ensure_ascii=False, indent=2)
 
-        # Encode string to bytes — HTTP works with bytes, not strings
         # Перетворюємо JSON рядок в байти (string → bytes)
         body_bytes = body.encode("utf-8")
 
-        # Step 1: Send the status code line: "HTTP/1.1 200 OK"
+        # Step 1: Відправляємо статус код: "HTTP/1.1 200 OK"
         self.send_response(status_code)
 
-        # Step 2: Send headers
-        # Content-Type tells the browser: "this is JSON, not HTML"
+        # Step 2: Відправка headers
+        # Content-Type повідомляє браузеру: "це JSON, а не HTML"
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        # Content-Length tells the browser how many bytes to expect
+        # Content-Length повідомляє браузеру скільки очікувати байтів
         self.send_header("Content-Length", str(len(body_bytes)))
         # Говоримо браузеру що після відповіді з'єднання закривається
         self.send_header("Connection", "close")
-        # end_headers() sends an empty line — required by HTTP protocol
+        # end_headers() відправляємо порожній рядок - цього вимагає HTTP протокол
         self.end_headers()
 
-        # Step 3: Send the actual response body
-        # Відправляємо все в браузер
+        # Step 3: Відправляємо відповідь в браузер
         self.wfile.write(body_bytes)
         # Примусово відправляємо всі байти з буфера
         self.wfile.flush()
 
     def _serve_html(self, filename: str):
         """
-        Reads an HTML file from templates directory and sends it to browser.
-
-        Args:
-            filename: HTML filename, e.g. "index.html"
+        Читає HTML файл з папки templates і відправляє браузеру.
         """
-        # Build full path to the HTML file
-        # Example: /Users/.../src/templates/index.html
+        # Створюємо повний шлях до HTML файлу
+        # Приклад: /Users/.../src/templates/index.html
         filepath = os.path.join(TEMPLATES_DIR, filename)
 
-        # Check if file exists — if not, return 404
+        # Перевіряємо чи файл існує. Якщо файл відсутній, то повертаємо 404
         if not os.path.exists(filepath):
             self._send_json(
                 status_code=404,
@@ -432,12 +433,12 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             logger.warning(f"Template not found: {filepath}")
             return
 
-        # Read HTML file as bytes
-        # "rb" = read binary — we need bytes for HTTP
+        # Читаємо HTML файл по байтам
+        # "rb" = читаємо бінарний файл
         with open(filepath, "rb") as f:
             content = f.read()
 
-        # Send response
+        # Надсилаємо відповідь
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(content)))
@@ -448,16 +449,13 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def _serve_static(self, filepath: str):
         """
-        Serves static files: CSS, JS, images.
-        Automatically detects content type by file extension.
-
-        Args:
-            filepath: path after /static/, e.g. "css/style.css"
+        Роздає статичні файли: CSS, JS, зображення.
+        Автоматично визначає Content-Type по розширенню файлу.
         """
-        # Build full path to static file
+        # Створюємо повний шлях до статичного файлу
         full_path = os.path.join(STATIC_DIR, filepath)
 
-        # Check if file exists
+        # Перевіряємо чи файл існує
         if not os.path.exists(full_path):
             self._send_json(
                 status_code=404,
@@ -466,8 +464,8 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             logger.warning(f"Static file not found: {full_path}")
             return
 
-        # Detect content type by file extension
-        # Browser needs to know: "is this CSS or JS or image?"
+        # DВизначаємо тип контексту за розширенням файлу
+        # Браузеру потрібно знати: "це CSS, JS чи image?"
         extension = filepath.split(".")[-1].lower()
         content_types = {
             "css": "text/css",
@@ -478,10 +476,10 @@ class ImageServerHandler(BaseHTTPRequestHandler):
             "gif": "image/gif",
             "ico": "image/x-icon",
         }
-        # Fallback to binary stream if extension is unknown
+        # Провертаємось до бінарного потоку, якщо розширення невідоме
         content_type = content_types.get(extension, "application/octet-stream")
 
-        # Read file as bytes
+        # Читаємо файл по байтам
         with open(full_path, "rb") as f:
             content = f.read()
 
@@ -493,11 +491,11 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """
-        Override the default BaseHTTPRequestHandler logger.
-        By default it prints to stderr in an ugly format.
-        We silence it here because we handle logging ourselves.
+        Перевизначаємо дефолтний логер BaseHTTPRequestHandler.
+        За замовчуванням він виводить некрасивий формат в stderr.
+        Замовчуємо його — наш logger обробляє весь вивід.
         """
-        pass  # Our logger handles all output
+        pass  # Наш logger обробляє всі вихідні дані
 
 
 # ─────────────────────────────────────────────
@@ -506,17 +504,17 @@ class ImageServerHandler(BaseHTTPRequestHandler):
 
 def run_server():
     """
-    Creates and starts the HTTP server.
-    Reads host and port from environment variables.
+    Створює та запускає HTTP сервер.
+    Читає host і port з змінних оточення (.env файлу).
     """
-    # Read server config from .env file
-    # If not set — use sensible defaults
+    # Беремо данні для сервера з файлу .env
+    # Якщо данні відсутні, то беремо значення за замовчуванням
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "8000"))
 
     try:
-        # HTTPServer creation is INSIDE try block
-        # because this is where OSError happens if port is busy
+        # Створення HTTPServer відбувається в середину блоку try
+        # тому, що може виникнути помилка OSError якщо порт зайнятий
         server = ThreadingHTTPServer((host, port), ImageServerHandler)
 
         # Ініціалізуємо БД при старті
@@ -526,19 +524,20 @@ def run_server():
         logger.info(f"Server started at http://{host}:{port}")
         logger.info("Press Ctrl+C to stop")
 
-        # serve_forever() — starts an infinite loop, listens for requests
-        # Blocks here until Ctrl+C is pressed
+        # serve_forever() — запуск безкінечного циклу, очікує запити
+        # блокується поки не буде натиснено Ctrl+C
         server.serve_forever()
 
     except KeyboardInterrupt:
-        # Ctrl+C pressed — graceful shutdown
+        # Натискаємо Ctrl+C і завершаємо роботу
         logger.info("Server stopped by user")
         server.server_close()
 
     except OSError as e:
-        # errno 48 = "Address already in use" on macOS
-        # errno 98 = same error on Linux
-        if e.errno in (48, 98):
+        # errno 48 - якщо зайнятий порт на macOS
+        # errno 98 - якщо зайнятий порт на Linux
+        # errno 10048 - якщо зайнятий порт на Windows
+        if e.errno in (48, 98, 10048):
             logger.error(f"Port {port} is already in use!")
             logger.error(f"Run: lsof -i :{port} | xargs kill -9")
         else:
@@ -548,7 +547,6 @@ def run_server():
 # ENTRY POINT
 # ─────────────────────────────────────────────
 
-# This block runs ONLY when you execute: python app.py
-# It does NOT run when this file is imported by another module
+# Цей блок виконується тільки коли викнонується python app.py
 if __name__ == "__main__":
     run_server()
